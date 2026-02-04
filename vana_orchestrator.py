@@ -1,124 +1,105 @@
 # -*- coding: utf-8 -*-
-"""
-Vana Orchestrator v5.9.2 – O Maestro da Forja (Edição Especial Darshan)
-- Gerencia o fluxo completo: Ingestão -> STT -> Auditoria -> Edição -> Reparo -> Merge -> WP
-- Suporte para Corte Cirúrgico Opcional (--start e --end)
-- Consolida métricas de custo e performance no stats.json
-- Gatilho final de notificações (Telegram)
-"""
 import argparse
 import sys
-import time
-import os
-import traceback
-from pathlib import Path
-
-# Importação dos Módulos da Forja
-from src.transcriber import run_transcription
-from src.auditor_raw import audit_or_fix
+from src.transcriber import run_transcription, get_video_duration
 from src.editor import run_editor
-from src.auditor_reparador import run_repair
-from src.merger import run_merger
+from src.parser import parse_shortcodes  # ✨ NOVO: O Minerador
 from src.wp_rest_client import publish_wp
-from src.notifier import notify_success, notify_failure
-from src.smart_ai_wrapper import SmartAIWrapper
-from src.utils.io import write_json
+from src.utils.supabase_client import VanaSupabase
+from src.utils.time import parse_timestamp
+from src.notifier import notify_budget_block, notify_success
+
+# CONFIGURAÇÕES DE CUSTO (FINOPS)
+COST_PER_HOUR = 0.85 
+MONTHLY_LIMIT = 50.0 
+
+def pre_flight_budget_check(args, db):
+    """Calcula o pedágio antes de iniciar a decolagem."""
+    print("⚖️ [PRE-FLIGHT] Verificando viabilidade financeira...")
+    
+    if args.start and args.end:
+        duration_sec = parse_timestamp(args.end) - parse_timestamp(args.start)
+    else:
+        duration_sec = get_video_duration(args.source_url)
+    
+    estimated_cost = (duration_sec / 3600) * COST_PER_HOUR
+    current_spend = db.get_monthly_spend()
+    
+    print(f"   💰 Custo estimado: ${estimated_cost:.2f} | Gasto mensal: ${current_spend:.2f}")
+
+    if (current_spend + estimated_cost) > MONTHLY_LIMIT:
+        return False, estimated_cost, current_spend
+    return True, estimated_cost, current_spend
 
 def main():
-    # 1. Configuração de Argumentos (Entradas do GHA)
-    parser = argparse.ArgumentParser(description="Forja HariKatha – Pipeline Digital")
-    parser.add_argument("--source_url", required=True, help="URL da Live ou Vídeo")
-    parser.add_argument("--post_id", type=int, required=True, help="ID do post no WordPress")
-    parser.add_argument("--lang", default="pt", help="Idioma da transcrição")
-    parser.add_argument("--publish", action="store_true", help="Publicar imediatamente?")
-    
-    # NOVOS PARÂMETROS OPCIONAIS (v5.9.2)
-    parser.add_argument("--start", default=None, help="Início do corte (HH:MM:SS)")
-    parser.add_argument("--end", default=None, help="Fim do corte (HH:MM:SS)")
+    parser = argparse.ArgumentParser(description="Forja HariKatha v6.3 Diamond")
+    parser.add_argument("--source_url", required=True)
+    parser.add_argument("--post_id", type=int, required=True)
+    parser.add_argument("--target_lang", default="pt")
+    parser.add_argument("--start", default=None)
+    parser.add_argument("--end", default=None)
+    parser.add_argument("--publish", action="store_true")
     args = parser.parse_args()
 
-    start_time = time.time()
-    stats = {
-        "source_url": args.source_url,
-        "post_id": args.post_id,
-        "lang": args.lang,
-        "surgical_cut": {"start": args.start, "end": args.end},
-        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "success": False
-    }
+    db = VanaSupabase()
+    
+    # --- PASSO 0: FINOPS ---
+    allowed, est_cost, total_spent = pre_flight_budget_check(args, db)
+    if not allowed:
+        msg = f"🛑 LIMITE ATINGIDO: ${total_spent:.2f}. Esta aula custaria +${est_cost:.2f}."
+        print(msg)
+        notify_budget_block(msg, total_spent)
+        sys.exit(0)
 
     try:
-        print(f"🚀 Iniciando Forja v5.9.2 para o Post #{args.post_id}")
-        if args.start or args.end:
-            print(f"   ✂️ Modo de Corte Ativado: {args.start or 'Início'} -> {args.end or 'Fim'}")
+        # --- PASSO 1: IDENTIDADE ---
+        source_id = db.get_source_id(args.source_url)
+        aula = db.upsert_aula(source_id)
+        aula_id = aula['id']
 
-        # --- PASSO 1: TRANSCRIÇÃO (Com suporte a Corte Cirúrgico) ---
-        print("\n--- PASSO 1: Transcrição ---")
-        t_stats = run_transcription(
-            args.source_url, 
-            lang_hint=args.lang, 
-            start=args.start, 
-            end=args.end
-        )
-        stats["transcription"] = t_stats
+        # --- PASSO 2: TRANSCRIÇÃO ---
+        raw_content = db.buscar_raw_existente(aula_id)
+        if not raw_content:
+            t_stats = run_transcription(args.source_url, args.start, args.end)
+            raw_content = t_stats['content']
+            db.salvar_raw(aula_id, raw_content, t_stats['sha256'])
+        
+        # --- PASSO 3: REFINO ---
+        # Verificamos se já existe a versão final para evitar re-gasto de API
+        versao = db.buscar_versao_final(aula_id, args.target_lang)
+        
+        if not versao:
+            e_stats = run_editor(target_lang=args.target_lang)
+            # Salvamos e capturamos o ID da versão criada
+            versao_final_id = db.salvar_versao_final(
+                aula_id, 
+                args.target_lang, 
+                e_stats['text'], 
+                custo=e_stats['cost_usd'],
+                status=e_stats['status']
+            )
+            final_text = e_stats['text']
+            status_final = e_stats['status']
 
-        # --- PASSO 2: AUDITORIA BRUTA ---
-        print("\n--- PASSO 2: Auditoria de Qualidade ---")
-        a_stats = audit_or_fix()
-        stats["audit_raw"] = a_stats
-        if not a_stats.get("ok"):
-            reasons = "; ".join(a_stats.get("reasons", ["Falha desconhecida"]))
-            raise RuntimeError(f"Qualidade insuficiente da transcrição: {reasons}")
+            # --- PASSO 3.5: MINERAÇÃO (ESTUDO CRUZADO) ✨ ---
+            print("💎 [MINING] Extraindo pérolas para o estudo cruzado...")
+            fragmentos = parse_shortcodes(final_text, versao_final_id)
+            db.salvar_segmentos(fragmentos)
+        else:
+            final_text = versao['texto_editado']
+            status_final = versao['status']
 
-        # --- PASSO 3: EDIÇÃO LITERÁRIA (IAST + Modo Darshan) ---
-        print("\n--- PASSO 3: Refino Editorial e IAST ---")
-        e_stats = run_editor()
-        stats["editor"] = e_stats
+        # --- PASSO 4: PUBLICAÇÃO ---
+        if args.publish:
+            publish_wp(args.post_id, final_text, status=status_final)
+            db.atualizar_post_id(aula_id, args.target_lang, args.post_id)
 
-        # --- PASSO 4: REPARO DE BLINDAGEM ---
-        print("\n--- PASSO 4: Restauração de Timestamps ---")
-        r_stats = run_repair()
-        stats["repair"] = r_stats
-
-        # --- PASSO 5: MERGE DE GLOSSÁRIO ---
-        print("\n--- PASSO 5: Injeção de Referências Śāstricas ---")
-        m_stats = run_merger()
-        stats["merger"] = m_stats
-
-        # --- PASSO 6: PUBLICAÇÃO INCREMENTAL ---
-        print("\n--- PASSO 6: Entrega ao WordPress ---")
-        final_file = m_stats.get("output_file")
-        p_stats = publish_wp(args.post_id, final_file, publish=args.publish)
-        stats["publish"] = p_stats
-
-        # --- FINALIZAÇÃO ---
-        end_time = time.time()
-        stats["duration_seconds"] = round(end_time - start_time, 2)
-        stats["total_cost"] = e_stats.get("cost_usd", 0)
-        stats["success"] = True
-
-        # Resumo de Custo para Auditoria
-        ai_info = SmartAIWrapper().get_cost_summary()
-        stats["cost_summary"] = ai_info
-
-        print(f"\n✅ Forja Concluída em {stats['duration_seconds']}s")
-        notify_success(stats)
+        print(f"✅ [SUCESSO] Processo concluído. Status: {status_final}")
+        notify_success(aula_id, status_final)
 
     except Exception as e:
-        # Sanitização: remove senhas de app do log de erro antes de notificar
-        error_msg = str(e).replace(os.getenv("WP_APP_PASS", "SECRET"), "***")
-        print(f"\n❌ ERRO NO PIPELINE: {error_msg}")
-        
-        stats["success"] = False
-        stats["error"] = error_msg
-        stats["traceback"] = traceback.format_exc(limit=3)
-        
-        notify_failure(error_msg, stats)
+        print(f"❌ [ERRO] Falha no pipeline: {e}")
         sys.exit(1)
-
-    finally:
-        # Salva o relatório final independente do resultado
-        write_json("work/stats.json", stats)
 
 if __name__ == "__main__":
     main()

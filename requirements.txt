@@ -1,20 +1,18 @@
-# --- Motores de IA (STT e LLM) ---
-groq>=0.9.0
-anthropic>=0.34.0
-google-generativeai>=0.7.0
-openai>=1.50.0
+# --- 🧠 INTELIGÊNCIA ARTIFICIAL (LLMs) ---
+groq>=0.4.2          # Motor Whisper-v3 (Transcrição ultra-rápida)
+anthropic>=0.18.1    # Claude 3.5 Sonnet (Editor Vāṇī-Śuddha)
+google-generativeai  # Gemini 1.5 Pro (Fallback e Análise de Mídia)
+openai               # GPT-4o (Opção adicional de refino)
 
-# --- Infraestrutura e Resiliência ---
-requests>=2.31.0
-tenacity>=8.2.0
-python-dotenv>=1.0.0
+# --- 💾 PERSISTÊNCIA E ACERVO ---
+supabase>=2.0.0      # Conexão com o Banco de Dados (Idempotência e Memória)
+python-dotenv        # Gerenciamento de Variáveis de Ambiente (.env)
 
-# --- Extração de Mídia (Músculo) ---
-yt-dlp>=2024.1.0
+# --- 🎙️ PROCESSAMENTO DE MÍDIA ---
+yt-dlp               # Download Universal (YouTube, Facebook, etc.)
+pydub==0.25.1        # Manipulação de Áudio (necessário para o fatiamento)
+diff-match-patch     # Algoritmo para similaridade de títulos e textos
 
-# --- Integração Teológica (Google Sheets) ---
-gspread>=6.0.0
-google-auth>=2.29.0
-
-# --- Utilitários de Texto ---
-chardet>=5.0.0
+# --- 📡 INTEGRAÇÃO E WEB ---
+requests             # Ponte REST API para o WordPress e Notificações
+base64               # (Nativo, mas listado para documentação de Auth)

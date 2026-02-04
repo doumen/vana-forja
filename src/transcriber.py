@@ -1,149 +1,126 @@
 # -*- coding: utf-8 -*-
 """
-Transcriber v5.9.2 – O Músculo STT (Edição Corte Cirúrgico)
-- Download inteligente via yt-dlp com --download-sections
-- Sincronia de Offset: Timestamps casam com o tempo real da live
-- Transcrição ultra-rápida via Groq Whisper-v3
-- Cache persistente via SHA-256
+Transcritor HariKatha v6.3 - Diamond Edition
+- Suporte a YouTube e Facebook via yt-dlp.
+- Fingerprinting SHA-256 para evitar duplicidade.
+- Chunking de 10 minutos para estabilidade na Groq.
+- Cortes cirúrgicos (start/end) nativos.
 """
+
 import os
+import hashlib
 import subprocess
-import math
-import shutil
 from pathlib import Path
 from groq import Groq
 
-from src.utils.io import sha256_file, write, write_json
-from src.utils.time import format_timestamp, parse_timestamp
-from src.utils.cache import PersistentCache
+# Configurações de Trabalho
+WORK_DIR = Path("work/audio")
+CHUNK_LENGTH = 600  # 10 minutos em segundos
 
-# Configurações de Diretórios
-WORK_DIR = Path("work")
-AUDIO_DIR = WORK_DIR / "audio"
-TEXT_DIR = WORK_DIR / "transcripts"
-CHUNK_MINUTES = int(os.getenv("CHUNK_MINUTES", "10"))
-
-def _get_duration(path: Path) -> float:
-    """Obtém a duração exata do áudio via ffprobe."""
+def get_video_duration(url: str) -> int:
+    """Obtém a duração total do vídeo sem baixá-lo (Pre-flight)."""
     cmd = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", str(path)
+        "yt-dlp", "--get-duration", "--format", "bestaudio", url
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return float(result.stdout.strip())
-
-def _download_audio(url: str, start: str = None, end: str = None) -> Path:
-    """Download seguro com suporte a corte cirúrgico opcional."""
-    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    dst_base = AUDIO_DIR / "source"
-    output_template = f"{dst_base}.%(ext)s"
-
-    cmd = [
-        "yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", "0",
-        "-o", output_template, "--no-playlist", url
-    ]
-
-    # Aplica o Corte Cirúrgico se ambos os parâmetros existirem
-    if start and end and len(start.strip()) > 0 and len(end.strip()) > 0:
-        # Formato yt-dlp: "*00:10:00-00:20:00"
-        cmd.extend(["--download-sections", f"*{start.strip()}-{end.strip()}"])
-
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        write("work/audit/download_error.txt", f"URL: {url}\nErro: {e.stderr}")
-        raise RuntimeError("Falha no download. Verifique se a URL e os tempos de corte são válidos.")
+        # Tenta converter o output (HH:MM:SS ou MM:SS) para segundos
+        output = subprocess.check_output(cmd).decode().strip()
+        parts = list(map(int, output.split(':')))
+        if len(parts) == 3: return parts[0]*3600 + parts[1]*60 + parts[2]
+        if len(parts) == 2: return parts[0]*60 + parts[1]
+        return int(output)
+    except:
+        return 3600 # Fallback 1h se falhar
 
-    for f in AUDIO_DIR.glob("source.*"):
-        if f.suffix == ".mp3": return f
-    raise FileNotFoundError("O arquivo mp3 não foi gerado.")
+def generate_fingerprint(file_path: Path) -> str:
+    """Gera o DNA (SHA-256) do arquivo de áudio."""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
-def _split_audio(src: Path, chunk_minutes: int = 10) -> list[Path]:
-    """Divide o áudio em chunks de 10 minutos para respeitar limites da API."""
-    chunks_dir = AUDIO_DIR / "chunks"
-    if chunks_dir.exists(): shutil.rmtree(chunks_dir)
-    chunks_dir.mkdir(parents=True)
-
-    total_duration = _get_duration(src)
-    chunk_seconds = chunk_minutes * 60
-    num_parts = math.ceil(total_duration / chunk_seconds)
-
-    parts = []
-    for i in range(num_parts):
-        start_chunk = i * chunk_seconds
-        dst = chunks_dir / f"part_{i:03d}.mp3"
-        cmd = [
-            "ffmpeg", "-y", "-i", str(src), "-ss", str(start_chunk), "-t", str(chunk_seconds),
-            "-vn", "-acodec", "libmp3lame", "-q:a", "2", str(dst)
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
-        parts.append(dst)
-    return parts
-
-def _transcribe_chunk(client: Groq, chunk_path: Path, lang: str) -> list[dict]:
-    """Chama Groq Whisper-v3."""
-    with open(chunk_path, "rb") as f:
-        response = client.audio.transcriptions.create(
-            file=f,
-            model=os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3"),
-            response_format="verbose_json",
-            language=lang,
-            temperature=0.0
-        )
-    return getattr(response, "segments", []) or []
-
-def run_transcription(source_url: str, lang_hint: str = "pt", start: str = None, end: str = None) -> dict:
-    """Pipeline principal com lógica de Offset Temporal para cortes cirúrgicos."""
-    cache = PersistentCache("transcriptions", ttl_seconds=30 * 86400)
+def download_audio(url: str, start=None, end=None) -> Path:
+    """Baixa o áudio aplicando o corte cirúrgico se necessário."""
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    output_file = WORK_DIR / "source_audio.mp3"
     
-    # 1. Download (Com ou sem corte)
-    src = _download_audio(source_url, start, end)
-    audio_sha = sha256_file(src)
+    # Limpa arquivos anteriores
+    if output_file.exists(): output_file.unlink()
 
-    # 2. Cache Check
-    if cache.has(f"sha:{audio_sha}"):
-        return {"cached": True, **cache.get(f"sha:{audio_sha}")}
+    # Monta comando yt-dlp com download parcial
+    cmd = [
+        "yt-dlp",
+        "-x", "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "-o", str(output_file)
+    ]
 
-    # 3. Cálculo do Offset Inicial (Importante para manter sincronia da Live)
-    # Se o corte começou em 00:10:00, o primeiro segundo do arquivo deve ser 600s
-    initial_offset = parse_timestamp(start) if start else 0
+    # Adiciona argumentos de corte via FFmpeg (eficiente)
+    if start or end:
+        # Formato: --external-downloader ffmpeg --external-downloader-args "ffmpeg_args"
+        ffmpeg_args = ""
+        if start: ffmpeg_args += f" -ss {start}"
+        if end: ffmpeg_args += f" -to {end}"
+        cmd += ["--external-downloader", "ffmpeg", "--external-downloader-args", ffmpeg_args.strip()]
+
+    cmd.append(url)
     
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-    parts = _split_audio(src, CHUNK_MINUTES)
+    print(f"   📥 Baixando áudio (Surgical Cut: {start or 'Início'} -> {end or 'Fim'})...")
+    subprocess.run(cmd, check=True, capture_output=True)
+    return output_file
+
+def split_audio(audio_path: Path):
+    """Fatia o áudio em pedaços de 10 min para não estourar a API."""
+    print("   ✂️  Fatiando áudio em blocos de 10 minutos...")
+    chunks_dir = WORK_DIR / "chunks"
+    chunks_dir.mkdir(exist_ok=True)
     
-    all_lines = []
-    total_words = 0
-    current_offset = float(initial_offset)
+    # Limpa chunks antigos
+    for f in chunks_dir.glob("*.mp3"): f.unlink()
 
-    for part in parts:
-        segments = _transcribe_chunk(client, part, lang_hint)
-        part_duration = _get_duration(part)
+    cmd = [
+        "ffmpeg", "-i", str(audio_path),
+        "-f", "segment", "-segment_time", str(CHUNK_LENGTH),
+        "-c", "copy", str(chunks_dir / "chunk_%03d.mp3")
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return sorted(list(chunks_dir.glob("*.mp3")))
 
-        for seg in segments:
-            # O tempo absoluto = Offset da Live + Offset do Chunk + Início no Segmento
-            abs_start = current_offset + float(seg.get("start", 0))
-            text = (seg.get("text") or "").strip()
-            if not text: continue
+def run_transcription(url: str, start=None, end=None) -> dict:
+    """Fluxo principal de transcrição Diamond."""
+    client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+    
+    # 1. Download
+    audio_file = download_audio(url, start, end)
+    
+    # 2. Fingerprint (Para o Supabase evitar duplicidade)
+    sha256 = generate_fingerprint(audio_file)
+    
+    # 3. Chunking
+    chunks = split_audio(audio_file)
+    
+    # 4. Transcrição via Groq (Whisper-v3)
+    full_transcript = []
+    print(f"   🎙️  Iniciando STT via Groq ({len(chunks)} chunks)...")
+    
+    for chunk in chunks:
+        with open(chunk, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(chunk.name, file.read()),
+                model="whisper-large-v3",
+                response_format="text",
+                language="en" # Whisper detecta automaticamente, mas 'en' ajuda na base
+            )
+            full_transcript.append(transcription)
 
-            ts = format_timestamp(int(abs_start))
-            all_lines.append(f"[{ts}] {text}")
-            total_words += len(text.split())
-
-        current_offset += part_duration
-
-    # 4. Finalização
-    TEXT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = TEXT_DIR / "raw_transcript.txt"
-    out_path.write_text("\n".join(all_lines), encoding="utf-8")
-
-    shutil.rmtree(AUDIO_DIR / "chunks", ignore_errors=True)
-
-    stats = {
-        "audio_sha256": audio_sha,
-        "total_words": total_words,
-        "coverage_seconds": int(current_offset - initial_offset),
-        "initial_offset": initial_offset,
-        "out_file": str(out_path),
+    # 5. Cleanup
+    audio_file.unlink()
+    
+    content = "\n\n".join(full_transcript)
+    
+    return {
+        "content": content,
+        "sha256": sha256,
+        "chunks_count": len(chunks)
     }
-    cache.set(f"sha:{audio_sha}", stats)
-    return stats

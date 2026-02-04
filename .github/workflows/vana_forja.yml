@@ -1,116 +1,77 @@
-# ==============================================================================
-# 🔥 FORJA HARIKATHA v5.9.2 - O MOTOR DE TRANSMUTAÇÃO
-# ==============================================================================
-name: 🔥 Forja HariKatha v5.9.2
+name: 🚀 Forja HariKatha v6.1 Diamond
 
 on:
   workflow_dispatch:
     inputs:
       source_url:
-        description: 'URL do vídeo/live (YouTube ou Facebook)'
+        description: 'URL da Aula (YouTube ou Facebook)'
         required: true
-        type: string
       post_id:
-        description: 'ID do post rascunho no WordPress'
+        description: 'ID do Post no WordPress'
         required: true
-        type: string
-      start_time:
-        description: 'Início do Corte (ex: 00:15:00) - Opcional'
-        required: false
-        default: ''
-        type: string
-      end_time:
-        description: 'Fim do Corte (ex: 01:30:00) - Opcional'
-        required: false
-        default: ''
-        type: string
-      lang:
-        description: 'Idioma da aula (pt/en)'
-        required: false
+      target_lang:
+        description: 'Idioma Final (pt, en, es)'
         default: 'pt'
-        type: string
-      publish:
-        description: 'Publicar imediatamente no WordPress?'
+        required: true
+      start:
+        description: 'Corte Inicial (HH:MM:SS) - Opcional'
         required: false
-        default: false
-        type: boolean
-
-# Proteção de Concorrência: Evita processar o mesmo post em paralelo
-concurrency:
-  group: vana-forja-${{ github.event.inputs.post_id }}
-  cancel-in-progress: false
+      end:
+        description: 'Corte Final (HH:MM:SS) - Opcional'
+        required: false
 
 jobs:
-  forja:
-    name: 🛠️ Transmutar Vāṇī
+  forge_vashnava_vani:
     runs-on: ubuntu-latest
-    timeout-minutes: 240 # Aumentado para lidar com downloads de lives longas
+    
+    # --- 🏗️ INJEÇÃO DE SEGREDOS COMO VARIÁVEIS DE AMBIENTE ---
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      WP_URL: ${{ secrets.WP_URL }}
+      WP_USER: ${{ secrets.WP_USER }}
+      WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
-      - name: 📥 Checkout do Código
+      - name: 📥 Checkout do Repositório
         uses: actions/checkout@v4
 
-      - name: 🐍 Configurar Python 3.11
+      - name: 🐍 Configurar Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
           cache: 'pip'
 
-      - name: 💾 Gerenciar Cache da Forja
-        uses: actions/cache@v4
-        with:
-          path: work/.cache
-          # A chave do cache preserva custos de IA e transcrições já feitas
-          key: vana-cache-${{ runner.os }}-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            vana-cache-${{ runner.os }}-
-
-      - name: 📦 Instalar FFmpeg
+      - name: 🛠️ Instalar Dependências de Sistema (FFmpeg)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y ffmpeg
 
-      - name: 📚 Instalar Dependências Python
+      - name: 📦 Instalar Requisitos Python
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🔥 Executar Orquestrador Master (v5.9.2)
-        env:
-          # --- SEGREDOS ---
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          WP_BASE_URL: ${{ secrets.WP_BASE_URL }}
-          WP_USER: ${{ secrets.WP_USER }}
-          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
-          GOOGLE_CREDS: ${{ secrets.GOOGLE_CREDS_JSON }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          
-          # --- VARIÁVEIS ---
-          GLOSSARIO_SHEET_ID: ${{ vars.GLOSSARIO_SHEET_ID }}
-          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'claude' }}
-          BUDGET_DAY_USD: ${{ vars.BUDGET_DAY_USD || '5.0' }}
+      - name: 🔥 EXECUTAR MAESTRO (FORJA)
         run: |
           python vana_orchestrator.py \
             --source_url "${{ github.event.inputs.source_url }}" \
-            --post_id "${{ github.event.inputs.post_id }}" \
-            --start "${{ github.event.inputs.start_time }}" \
-            --end "${{ github.event.inputs.end_time }}" \
-            --lang "${{ github.event.inputs.lang }}" \
-            ${{ github.event.inputs.publish == 'true' && '--publish' || '' }}
+            --post_id ${{ github.event.inputs.post_id }} \
+            --target_lang "${{ github.event.inputs.target_lang }}" \
+            ${{ github.event.inputs.start && format('--start {0}', github.event.inputs.start) || '' }} \
+            ${{ github.event.inputs.end && format('--end {0}', github.event.inputs.end) || '' }} \
+            --publish
 
-      - name: 📤 Arquivar Artefatos e Logs
+      - name: 📂 Upload de Artefatos (Logs e Dados)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: forja-post-${{ github.event.inputs.post_id }}
-          retention-days: 7
+          name: forja-outputs-${{ github.run_id }}
           path: |
+            work/transcripts/*.txt
+            work/edited/*.txt
             work/stats.json
-            work/transcripts/raw_transcript.txt
-            work/final/POST_WORDPRESS_PRONTO.txt
-            work/audit/
-            work/edited/
+          retention-days: 5
