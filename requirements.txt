@@ -1,0 +1,20 @@
+# --- Motores de IA (STT e LLM) ---
+groq>=0.9.0
+anthropic>=0.34.0
+google-generativeai>=0.7.0
+openai>=1.50.0
+
+# --- Infraestrutura e Resiliência ---
+requests>=2.31.0
+tenacity>=8.2.0
+python-dotenv>=1.0.0
+
+# --- Extração de Mídia (Músculo) ---
+yt-dlp>=2024.1.0
+
+# --- Integração Teológica (Google Sheets) ---
+gspread>=6.0.0
+google-auth>=2.29.0
+
+# --- Utilitários de Texto ---
+chardet>=5.0.0

@@ -1,0 +1,101 @@
+name: 🔥 Forja HariKatha v5.9.1
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 'URL do vídeo/live (YouTube ou Facebook)'
+        required: true
+        type: string
+      post_id:
+        description: 'ID do post rascunho no WordPress'
+        required: true
+        type: string
+      lang:
+        description: 'Idioma da aula (pt/en)'
+        required: false
+        default: 'pt'
+        type: string
+      publish:
+        description: 'Publicar imediatamente no WordPress?'
+        required: false
+        default: false
+        type: boolean
+
+# Evita que o mesmo Post ID seja processado simultaneamente em jobs diferentes
+concurrency:
+  group: vana-forja-${{ github.event.inputs.post_id }}
+  cancel-in-progress: false
+
+jobs:
+  forja:
+    name: 🛠️ Transmutar Vāṇī
+    runs-on: ubuntu-latest
+    timeout-minutes: 180 # Proteção Watchdog para aulas muito longas
+
+    steps:
+      - name: 📥 Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip' # Otimiza instalação de bibliotecas Python
+
+      - name: 💾 Gerenciar Cache da Forja
+        uses: actions/cache@v4
+        with:
+          path: work/.cache
+          # A chave do cache garante que os custos e transcrições sejam lembrados
+          key: vana-cache-${{ runner.os }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            vana-cache-${{ runner.os }}-
+
+      - name: 📦 Instalar Dependências do Sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: 📚 Instalar Dependências Python
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🔥 Executar Orquestrador Master
+        env:
+          # --- SEGREDOS (Configurados nas Secrets do Repo) ---
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WP_BASE_URL: ${{ secrets.WP_BASE_URL }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASS: ${{ secrets.WP_APP_PASS }}
+          GOOGLE_CREDS: ${{ secrets.GOOGLE_CREDS_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          
+          # --- VARIÁVEIS (Configuradas nas Variables do Repo ou defaults) ---
+          GLOSSARIO_SHEET_ID: ${{ vars.GLOSSARIO_SHEET_ID }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'claude' }}
+          BUDGET_DAY_USD: ${{ vars.BUDGET_DAY_USD || '5.0' }}
+        run: |
+          python vana_orchestrator.py \
+            --source_url "${{ github.event.inputs.source_url }}" \
+            --post_id "${{ github.event.inputs.post_id }}" \
+            --lang "${{ github.event.inputs.lang }}" \
+            ${{ github.event.inputs.publish == 'true' && '--publish' || '' }}
+
+      - name: 📤 Arquivar Relatórios e Artefatos
+        if: always() # Garante o upload mesmo se houver falha no script
+        uses: actions/upload-artifact@v4
+        with:
+          name: forja-resultado-post-${{ github.event.inputs.post_id }}
+          retention-days: 7
+          path: |
+            work/stats.json
+            work/transcripts/raw_transcript.txt
+            work/final/POST_WORDPRESS_PRONTO.txt
+            work/audit/*.json
+            work/edited/*.json
