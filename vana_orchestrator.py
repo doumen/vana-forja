@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Vana Orchestrator v5.9.1 – O Maestro da Forja
+Vana Orchestrator v5.9.2 – O Maestro da Forja (Edição Especial Darshan)
 - Gerencia o fluxo completo: Ingestão -> STT -> Auditoria -> Edição -> Reparo -> Merge -> WP
-- Implementa Idempotência e Tratamento de Exceções Silenciosas
+- Suporte para Corte Cirúrgico Opcional (--start e --end)
 - Consolida métricas de custo e performance no stats.json
 - Gatilho final de notificações (Telegram)
 """
@@ -31,6 +31,10 @@ def main():
     parser.add_argument("--post_id", type=int, required=True, help="ID do post no WordPress")
     parser.add_argument("--lang", default="pt", help="Idioma da transcrição")
     parser.add_argument("--publish", action="store_true", help="Publicar imediatamente?")
+    
+    # NOVOS PARÂMETROS OPCIONAIS (v5.9.2)
+    parser.add_argument("--start", default=None, help="Início do corte (HH:MM:SS)")
+    parser.add_argument("--end", default=None, help="Fim do corte (HH:MM:SS)")
     args = parser.parse_args()
 
     start_time = time.time()
@@ -38,16 +42,24 @@ def main():
         "source_url": args.source_url,
         "post_id": args.post_id,
         "lang": args.lang,
+        "surgical_cut": {"start": args.start, "end": args.end},
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "success": False
     }
 
     try:
-        print(f"🚀 Iniciando Forja para o Post #{args.post_id}")
+        print(f"🚀 Iniciando Forja v5.9.2 para o Post #{args.post_id}")
+        if args.start or args.end:
+            print(f"   ✂️ Modo de Corte Ativado: {args.start or 'Início'} -> {args.end or 'Fim'}")
 
-        # --- PASSO 1: TRANSCRIÇÃO (Whisper v3) ---
+        # --- PASSO 1: TRANSCRIÇÃO (Com suporte a Corte Cirúrgico) ---
         print("\n--- PASSO 1: Transcrição ---")
-        t_stats = run_transcription(args.source_url, lang_hint=args.lang)
+        t_stats = run_transcription(
+            args.source_url, 
+            lang_hint=args.lang, 
+            start=args.start, 
+            end=args.end
+        )
         stats["transcription"] = t_stats
 
         # --- PASSO 2: AUDITORIA BRUTA ---
@@ -58,7 +70,7 @@ def main():
             reasons = "; ".join(a_stats.get("reasons", ["Falha desconhecida"]))
             raise RuntimeError(f"Qualidade insuficiente da transcrição: {reasons}")
 
-        # --- PASSO 3: EDIÇÃO LITERÁRIA (IAST) ---
+        # --- PASSO 3: EDIÇÃO LITERÁRIA (IAST + Modo Darshan) ---
         print("\n--- PASSO 3: Refino Editorial e IAST ---")
         e_stats = run_editor()
         stats["editor"] = e_stats
@@ -85,7 +97,7 @@ def main():
         stats["total_cost"] = e_stats.get("cost_usd", 0)
         stats["success"] = True
 
-        # Resumo de Custo para o Telegram
+        # Resumo de Custo para Auditoria
         ai_info = SmartAIWrapper().get_cost_summary()
         stats["cost_summary"] = ai_info
 
@@ -93,7 +105,7 @@ def main():
         notify_success(stats)
 
     except Exception as e:
-        # Sanitização: remove senhas de app do log de erro
+        # Sanitização: remove senhas de app do log de erro antes de notificar
         error_msg = str(e).replace(os.getenv("WP_APP_PASS", "SECRET"), "***")
         print(f"\n❌ ERRO NO PIPELINE: {error_msg}")
         
@@ -102,7 +114,6 @@ def main():
         stats["traceback"] = traceback.format_exc(limit=3)
         
         notify_failure(error_msg, stats)
-        # Retorna código de erro para o GitHub Actions entender que falhou
         sys.exit(1)
 
     finally:
