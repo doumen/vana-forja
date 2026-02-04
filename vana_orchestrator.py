@@ -1,105 +1,115 @@
-# -*- coding: utf-8 -*-
+import os
 import argparse
-import sys
-from src.transcriber import run_transcription, get_video_duration
-from src.editor import run_editor
-from src.parser import parse_shortcodes  # ✨ NOVO: O Minerador
-from src.wp_rest_client import publish_wp
+import subprocess
+import json
+from datetime import datetime
+from src.transcriber import VanaTranscriber
+from src.editor import VanaEditor
+from src.utils.wp_rest_client import VanaWPClient
 from src.utils.supabase_client import VanaSupabase
-from src.utils.time import parse_timestamp
-from src.notifier import notify_budget_block, notify_success
+from internetarchive import upload as ia_upload
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
 
-# CONFIGURAÇÕES DE CUSTO (FINOPS)
-COST_PER_HOUR = 0.85 
-MONTHLY_LIMIT = 50.0 
+class VanaOrchestrator:
+    def __init__(self):
+        self.db = VanaSupabase()
+        self.wp = VanaWPClient()
+        self.output_dir = "output"
+        os.makedirs(f"{self.output_dir}/frames", exist_ok=True)
+        os.makedirs(f"{self.output_dir}/audio", exist_ok=True)
 
-def pre_flight_budget_check(args, db):
-    """Calcula o pedágio antes de iniciar a decolagem."""
-    print("⚖️ [PRE-FLIGHT] Verificando viabilidade financeira...")
-    
-    if args.start and args.end:
-        duration_sec = parse_timestamp(args.end) - parse_timestamp(args.start)
-    else:
-        duration_sec = get_video_duration(args.source_url)
-    
-    estimated_cost = (duration_sec / 3600) * COST_PER_HOUR
-    current_spend = db.get_monthly_spend()
-    
-    print(f"   💰 Custo estimado: ${estimated_cost:.2f} | Gasto mensal: ${current_spend:.2f}")
-
-    if (current_spend + estimated_cost) > MONTHLY_LIMIT:
-        return False, estimated_cost, current_spend
-    return True, estimated_cost, current_spend
-
-def main():
-    parser = argparse.ArgumentParser(description="Forja HariKatha v6.3 Diamond")
-    parser.add_argument("--source_url", required=True)
-    parser.add_argument("--post_id", type=int, required=True)
-    parser.add_argument("--target_lang", default="pt")
-    parser.add_argument("--start", default=None)
-    parser.add_argument("--end", default=None)
-    parser.add_argument("--publish", action="store_true")
-    args = parser.parse_args()
-
-    db = VanaSupabase()
-    
-    # --- PASSO 0: FINOPS ---
-    allowed, est_cost, total_spent = pre_flight_budget_check(args, db)
-    if not allowed:
-        msg = f"🛑 LIMITE ATINGIDO: ${total_spent:.2f}. Esta aula custaria +${est_cost:.2f}."
-        print(msg)
-        notify_budget_block(msg, total_spent)
-        sys.exit(0)
-
-    try:
-        # --- PASSO 1: IDENTIDADE ---
-        source_id = db.get_source_id(args.source_url)
-        aula = db.upsert_aula(source_id)
-        aula_id = aula['id']
-
-        # --- PASSO 2: TRANSCRIÇÃO ---
-        raw_content = db.buscar_raw_existente(aula_id)
-        if not raw_content:
-            t_stats = run_transcription(args.source_url, args.start, args.end)
-            raw_content = t_stats['content']
-            db.salvar_raw(aula_id, raw_content, t_stats['sha256'])
+    def stage_0_preservation(self, video_url, folder_name):
+        """Baixa o vídeo, extrai áudio HQ e gera Golden Frames."""
+        print(f"📥 [STAGE 0] Iniciando preservação de: {video_url}")
         
-        # --- PASSO 3: REFINO ---
-        # Verificamos se já existe a versão final para evitar re-gasto de API
-        versao = db.buscar_versao_final(aula_id, args.target_lang)
-        
-        if not versao:
-            e_stats = run_editor(target_lang=args.target_lang)
-            # Salvamos e capturamos o ID da versão criada
-            versao_final_id = db.salvar_versao_final(
-                aula_id, 
-                args.target_lang, 
-                e_stats['text'], 
-                custo=e_stats['cost_usd'],
-                status=e_stats['status']
-            )
-            final_text = e_stats['text']
-            status_final = e_stats['status']
+        video_path = f"{self.output_dir}/video_master.mp4"
+        audio_hq = f"{self.output_dir}/audio/audio_hq.mp3"
 
-            # --- PASSO 3.5: MINERAÇÃO (ESTUDO CRUZADO) ✨ ---
-            print("💎 [MINING] Extraindo pérolas para o estudo cruzado...")
-            fragmentos = parse_shortcodes(final_text, versao_final_id)
-            db.salvar_segmentos(fragmentos)
+        # 1. Download Master via yt-dlp
+        cmd_dl = [
+            'yt-dlp', '-o', video_path,
+            '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
+            '--keep-video', video_url
+        ]
+        subprocess.run(cmd_dl, check=True)
+
+        # 2. Extração de Golden Frames via ffmpeg (1 a cada 5 min)
+        print("📸 Extraindo Golden Frames para a Batalha de Capas...")
+        cmd_frames = [
+            'ffmpeg', '-i', video_path, '-vf', 'fps=1/300', 
+            f'{self.output_dir}/frames/frame_%03d.jpg'
+        ]
+        subprocess.run(cmd_frames, check=True)
+        
+        return video_path, audio_hq
+
+    def stage_1_archive_org(self, audio_path, title):
+        """Envia o áudio HQ para o Archive.org (Preservação Eterna)."""
+        print("🏛️ [STAGE 1] Fazendo upload para Archive.org...")
+        identifier = f"vana-forja-{datetime.now().strftime('%Y%m%d-%H%M')}"
+        meta = {'title': title, 'mediatype': 'audio', 'collection': 'opensource_audio'}
+        
+        # Requer IA_ACCESS_KEY e IA_SECRET_KEY configurados no ambiente
+        ia_upload(identifier, files=[audio_path], metadata=meta)
+        return f"https://archive.org/details/{identifier}"
+
+    def stage_2_google_drive(self, video_path, folder_name):
+        """Envia o Master para o Google Drive da Tour."""
+        print("🚀 [STAGE 2] Enviando Vídeo Master para o Google Drive...")
+        # Lógica de Service Account
+        creds_json = os.getenv('GDRIVE_SERVICE_ACCOUNT_JSON')
+        info = json.loads(creds_json)
+        creds = service_account.Credentials.from_service_account_info(info)
+        service = build('drive', 'v3', credentials=creds)
+
+        file_metadata = {
+            'name': f"{folder_name}_MASTER.mp4",
+            'parents': [os.getenv('GDRIVE_FOLDER_ID')]
+        }
+        service.files().create(body=file_metadata, media_body=video_path).execute()
+
+    def run(self, video_url, post_id=None):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        folder_name = f"aula_{timestamp}"
+
+        # --- PRESERVAÇÃO ---
+        video_master, audio_hq = self.stage_0_preservation(video_url, folder_name)
+        archive_url = self.stage_1_archive_org(audio_hq, folder_name)
+        self.stage_2_google_drive(video_master, folder_name)
+
+        # --- INTELIGÊNCIA TEOLÓGICA ---
+        # Busca conceitos dinâmicos da Planilha/Supabase para injetar no Editor
+        print("🧠 Buscando vocabulário canônico no Supabase...")
+        conceitos = self.db.client.table("vana_conceitos").select("*").execute()
+        dicionario_sangha = {c['slug']: c['tag_iast'] for c in conceitos.data}
+
+        # --- TRANSCRIÇÃO & EDIÇÃO ---
+        print("✍️ Iniciando Transcrição e Refino Editorial V19...")
+        transcription = VanaTranscriber().process(audio_hq)
+        
+        # O Editor agora recebe o dicionário para não 'inventar' tags
+        editor = VanaEditor(dicionario=dicionario_sangha)
+        content_v19 = editor.refine(transcription, metadata={"archive_url": archive_url})
+
+        # --- FINALIZAÇÃO ---
+        if post_id:
+            print(f"🆙 Atualizando post existente {post_id} no WordPress...")
+            self.wp.update_post(post_id, content_v19)
         else:
-            final_text = versao['texto_editado']
-            status_final = versao['status']
+            print("🆕 Criando novo rascunho Diamond no WordPress...")
+            post_id = self.wp.create_post(content_v19, status="draft")
 
-        # --- PASSO 4: PUBLICAÇÃO ---
-        if args.publish:
-            publish_wp(args.post_id, final_text, status=status_final)
-            db.atualizar_post_id(aula_id, args.target_lang, args.post_id)
-
-        print(f"✅ [SUCESSO] Processo concluído. Status: {status_final}")
-        notify_success(aula_id, status_final)
-
-    except Exception as e:
-        print(f"❌ [ERRO] Falha no pipeline: {e}")
-        sys.exit(1)
+        # Salva o rastro no Supabase para a Fábrica de Reels
+        self.db.save_aula_processada(post_id, archive_url, transcription)
+        
+        print(f"✅ PROCESSO CONCLUÍDO! Post ID: {post_id}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--post_id", required=False)
+    args = parser.parse_args()
+
+    orchestrator = VanaOrchestrator()
+    orchestrator.run(args.url, args.post_id)

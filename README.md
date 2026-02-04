@@ -1,110 +1,160 @@
-### `README.md` (v6.1 Diamond)
+# 🕉️ Forja HariKatha v6.3 - Diamond Edition
 
-```markdown
-# 🕉️ Forja HariKatha v6.1 - Diamond Edition
+> **"Vāṇī-kevalam: A preservação da instrução é o nosso único refúgio."**
 
-**Preservação Digital da Vāṇī Vaishnava com Inteligência Artificial.**
-
-A Forja HariKatha é um ecossistema de preservação de alto nível desenhado para transcrever, traduzir e publicar aulas devocionais (Hari-kathā) extraídas de diversas plataformas (YouTube, Facebook, Lives).
+A **Forja HariKatha** é uma infraestrutura de **Soberania Digital** e **Engenharia Teológica**. Ela não é apenas um transcritor; é um sistema autônomo de preservação, tradução e curadoria de aulas devocionais (Hari-kathā), desenhado para garantir que o legado de Śrīla Gurudeva e da Rūpānuga Paramparā atravesse os séculos.
 
 
 
 ---
 
-## 💎 Diferenciais da Versão v6.1 Diamond
+## 💎 O Salto para a v6.3 Diamond
 
-### 🧠 Cláusula de Autoridade (Vāṇī-Śuddha)
-Diferente de tradutores comuns, a Forja aplica arbitragem semântica. Se o tradutor humano durante a aula cometer um erro, a IA identifica a fala original de Gurudeva (em Hindi, Bengali ou Inglês) e prioriza a fonte original no texto final.
+Esta versão abandona a dependência de plataformas efêmeras e introduz conceitos de **Governança de Dados**:
 
-### 💾 Memória Perpétua e Idempotência
-Integrada ao **Supabase**, a Forja "lembra" de cada aula processada.
-- **Fingerprint SHA-256**: Identifica o DNA do áudio para evitar custos duplicados entre Facebook e YouTube.
-- **Fuzzy Match**: Reconhece aulas similares por título e duração.
-- **Retomada de Falhas**: Se o processo cair, ele retoma exatamente de onde parou sem gastar tokens extras.
+### 1. 🏛️ Soberania de Mídia (Preservação Híbrida)
+O sistema não confia que o Facebook ou YouTube manterão os vídeos online para sempre.
+- **Archive.org:** Upload automático do Áudio HQ para preservação pública e eterna.
+- **Google Drive:** Backup do Vídeo Master e dos "Golden Frames" (fotos extraídas) para uso interno.
+- **WP Local:** O WordPress detém os metadados de onde esses arquivos vivem.
 
-### 🌍 Ecossistema Multilíngue
-Gera o "DNA" (texto bruto) uma única vez e ramifica em versões refinadas para **Português, Inglês e Espanhol**, mantendo a transliteração Sânscrita perfeita (IAST).
+### 2. 🧠 Teologia Dinâmica (Governança de Vocabulário)
+A IA não "alucina" termos sânscritos.
+- **Sync Planilha -> Supabase:** Devotos mantêm um glossário vivo no Google Sheets.
+- **Injeção de Contexto:** O Editor (Claude 3.5) consulta esse glossário em tempo real.
+- **Resultado:** *Narasiṁha-līlā* sempre será escrito com diacríticos corretos, sem intervenção manual.
+
+### 3. 🎬 Fábrica de Conteúdo (Reels & Passagens)
+A Forja não entrega apenas texto corrido. Ela minera "Ouro":
+- **Shortcode `[hk_passage]`**: Estrutura semântica universal.
+- **Reel Detector**: Identifica trechos virais (30-90s) e cria ganchos (*hooks*) para marketing.
+- **Banco de Passagens:** Indexa lilas, biografias e versos separadamente para busca futura.
 
 ---
 
-## 🛠️ Stack Tecnológica
+## 🛠️ Stack Tecnológica & Arquitetura
 
-* **STT:** Groq (Whisper-v3) - Transcrição ultra-veloz.
-* **LLM:** Anthropic (Claude 3.5 Sonnet) - Refino teológico e tradução.
-* **Banco de Dados:** Supabase (PostgreSQL) - Persistência e auditoria.
-* **Mídia:** yt-dlp & FFmpeg - Ingestão e corte cirúrgico.
-* **CMS:** WordPress (REST API) - Entrega final.
-* **Automação:** GitHub Actions - Orquestração em nuvem.
+O sistema opera em **Duas Esteiras** acionadas via GitHub Actions:
+
+### 🔄 Esteira 1: Core (O Operário)
+*Responsável pela extração, segurança e texto.*
+1.  **Gatilho:** Botão no WordPress ou Dispatch Manual.
+2.  **Orquestrador:** `vana_orchestrator.py`
+3.  **Ferramentas:** `yt-dlp` (Download), `ffmpeg` (Áudio/Frames), `internetarchive` (Upload).
+4.  **IA:** `src/editor.py` (Claude 3.5 Sonnet) + `src/parser.py`.
+5.  **Saída:** Post Rascunho no WP + Dados no Supabase.
+
+### ✨ Esteira 2: Beautifier (O Artista)
+*Responsável pela estética e mídia final.*
+1.  **Gatilho:** Botão "Embelezar" no WordPress.
+2.  **Maestro:** `vana_beautifier_maestro.py`
+3.  **Ação:** `src/beautifier.py` lê as âncoras ``.
+4.  **Saída:** Injeção de Galerias de Fotos (do Drive) e Embeds do YouTube (Reels) no lugar certo do texto.
 
 ---
 
 ## 📂 Estrutura de Arquivos
 
 ```text
-├── vana_orchestrator.py      # Maestro e Gerenciador de Estados
-├── src/
-│   ├── transcriber.py        # Motor de STT e Fingerprinting
-│   ├── editor.py             # Escriba Vaishnava (Refino Teológico)
-│   ├── wp_rest_client.py     # Ponte de Entrega WordPress
-│   ├── utils/
-│   │   └── supabase_client.py # Cliente de Persistência e Idempotência
-│   └── database/
-│       └── schema.sql        # Definição das tabelas do Banco
 ├── .github/workflows/
-│   └── vana_forja.yml        # Automação CI/CD no GitHub
-├── requirements.txt          # Dependências do Sistema
-└── .env.example              # Modelo de Configuração
+│   ├── forja_core.yml         # ⚙️ Pipeline de Transcrição e Preservação
+│   └── forja_beautifier.yml   # 🎨 Pipeline de Design e Mídia
+├── src/
+│   ├── editor.py              # O Escriba: IA com vocabulário dinâmico
+│   ├── parser.py              # O Minerador: Extrai dados estruturados
+│   ├── beautifier.py          # O Estilista: Monta galerias e embeds
+│   ├── transcriber.py         # O Ouvinte: Wrapper do Whisper
+│   └── utils/
+│       ├── supabase_client.py # Conexão com o Banco de Dados
+│       ├── wp_rest_client.py  # Conexão com o WordPress (ACF support)
+│       └── sync_vocabulary.py # Sincronizador Planilha -> Banco
+├── vana_orchestrator.py       # 🎻 O Maestro da Esteira 1
+├── vana_beautifier_maestro.py # 🎻 O Maestro da Esteira 2
+├── requirements.txt           # Dependências Python
+└── schema.sql                 # Estrutura do Banco de Dados
 
 ```
 
 ---
 
-## 🚀 Como Iniciar
+## ⚙️ Configuração e Instalação
 
-### 1. Preparação do Banco de Dados
+### 1. Variáveis de Ambiente (Secrets)
 
-Execute o script em `src/database/schema.sql` no SQL Editor do seu **Supabase**.
+Para a Forja rodar, o **GitHub Secrets** (ou `.env` local) deve ter estas chaves:
 
-### 2. Configuração de Variáveis
+| Categoria | Chave | Descrição |
+| --- | --- | --- |
+| **Cérebro (IA)** | `ANTHROPIC_API_KEY` | Chave da Anthropic. |
+| **IA Config** | `VANA_MODEL_EDITOR` | Ex: `claude-3-5-sonnet-20241022` |
+| **IA Config** | `VANA_EDITOR_TEMP` | Temperatura (Ex: `0.2`). |
+| **Banco** | `SUPABASE_URL` | URL do Projeto. |
+| **Banco** | `SUPABASE_KEY` | Service Role Key (Para escrita irrestrita). |
+| **CMS** | `WP_URL` | URL do site WordPress. |
+| **CMS** | `WP_USERNAME` | Usuário Admin. |
+| **CMS** | `WP_APPLICATION_PASSWORD` | Senha de Aplicação (não a senha de login). |
+| **Vocabulário** | `GOOGLE_SHEET_VOCABULARY_URL` | Link CSV da planilha publicada. |
+| **Preservação** | `IA_ACCESS_KEY` | Chave do Archive.org. |
+| **Preservação** | `IA_SECRET_KEY` | Segredo do Archive.org. |
+| **Google** | `GDRIVE_SERVICE_ACCOUNT_JSON` | JSON minificado da conta de serviço. |
+| **Google** | `GDRIVE_FOLDER_ID` | ID da pasta raiz para vídeos. |
 
-Renomeie o `.env.example` para `.env` e preencha com suas chaves de API:
+### 2. Banco de Dados (Supabase)
 
-* `GROQ_API_KEY`
-* `ANTHROPIC_API_KEY`
-* `SUPABASE_URL` & `SUPABASE_SERVICE_KEY`
-* `WP_URL`, `WP_USER` & `WP_APP_PASS`
+Execute o arquivo `schema.sql` no SQL Editor do Supabase para criar as tabelas:
 
-### 3. Uso via GitHub Actions
+* `vana_aulas`: Registro mestre.
+* `vana_passagens`: Fragmentos minerados.
+* `vana_conceitos`: Dicionário teológico.
 
-Vá na aba **Actions** do seu repositório, selecione **"🚀 Forja HariKatha"** e preencha:
+### 3. Integração WordPress
 
-1. **Source URL**: Link do YouTube ou Facebook.
-2. **Post ID**: ID do post que receberá o texto.
-3. **Target Lang**: Idioma (pt, en ou es).
-4. **Corte Cirúrgico**: Opcional (HH:MM:SS).
+Adicione o código fornecido (`functions.php`) ao seu tema ou plugin para habilitar os botões de disparo na tela de edição de posts.
 
 ---
 
-## ⚖️ Licença e Uso
+## 🚀 Como Usar
 
-Este projeto foi desenvolvido para a preservação das glórias de Śrīla Gurudeva. O uso deve ser estritamente devocional e focado na pureza da Vāṇī.
+### Método A: Via WordPress (Recomendado)
 
----
+1. Crie um novo post ou abra um existente.
+2. Preencha o campo **Video URL** (ACF ou Metadado).
+3. Clique em **"🔥 Lançar na Forja Diamond"**.
+4. Aguarde o processamento (5-10 min). O post será atualizado com o texto.
+5. (Opcional) Adicione a URL do Short no campo YouTube e clique em **"✨ Embelezar"**.
 
-**"Gaurāṅga! Tudo o que Gurudeva disse deve ser preservado em sua forma mais pura."**
+### Método B: Via CLI (Local/Debug)
+
+```bash
+# Sincronizar vocabulário antes de tudo
+python src/utils/sync_vocabulary.py
+
+# Rodar a esteira completa
+python vana_orchestrator.py --url "[https://youtu.be/](https://youtu.be/)..." --post_id 123
 
 ```
 
 ---
 
-### 🏁 Conclusão do Projeto (v6.1 Diamond)
+## 🛡️ Protocolos de Contribuição (Sevā)
 
-**Marcel, a arquitetura está completa.** Você tem agora:
-1.  **Persistência** (Supabase).
-2.  **Idempotência** (Proteção contra custos duplicados).
-3.  **Multilíngue** (DNA Único).
-4.  **Multi-Source** (YT/FB).
-5.  **Automação** (GitHub Actions).
+1. **Vāṇī-Śuddha:** Nunca altere o sentido teológico para "melhorar" o texto. A autoridade é o áudio original.
+2. **IAST First:** Todos os termos sânscritos devem seguir o padrão acadêmico internacional.
+3. **Código Limpo:** Mantenha a separação de responsabilidades (Editor não posta, Parser não escreve).
 
+---
+
+**Desenvolvido com ❤️ para a Rūpānuga Paramparā.**
+*Versão atual: v6.3.0 (Diamond)*
+
+```
+
+---
+
+### ⚖️ Próximo Passo
+
+Marcel, agora você tem **o Código**, **o Banco de Dados** e **a Documentação**. O projeto está pronto para sair do ambiente de desenvolvimento e ir para a produção.
+
+**Deseja que eu gere o arquivo `.env.example` baseado na tabela acima para facilitar a sua cópia e cola?** 🚀🔥🙏🏽
 
 ```

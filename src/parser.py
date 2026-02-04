@@ -1,61 +1,85 @@
 # -*- coding: utf-8 -*-
 """
-Minerador de Fragmentos v6.3 - Diamond
-- Extração cirúrgica de Shortcodes [vana-xxx].
-- Mapeamento de Atributos (ref, title, author).
-- Sincronização de Timestamps para cada fragmento.
+Parser Vaishnava v6.3 Diamond – O Minerador de Dados
+- Extração de Atributos: type, reel, hook.
+- Identificação de Timestamps: Vincula o tempo ao bloco.
+- Prontidão para Supabase: Formata os dados para a Fábrica de Reels.
 """
 
 import re
-import uuid
+from typing import List, Dict, Optional
 
-def parse_shortcodes(text: str, versao_id: str):
-    """
-    Varre o texto final em busca de blocos teológicos e prepara para o Supabase.
-    """
-    # Regex para capturar: [vana-TIPO atributo="valor"]CONTEUDO[/vana-TIPO]
-    # O flag re.DOTALL (s) permite que o '.' capture quebras de linha.
-    pattern = r"\[vana-(?P<tipo>\w+)(?P<attrs>[^\]]*)\](?P<conteudo>.*?)\[/vana-(?P=tipo)\]"
-    
-    fragments = []
-    matches = re.finditer(pattern, text, re.DOTALL)
-    
-    for match in matches:
-        tipo = match.group('tipo')
-        attrs_raw = match.group('attrs')
-        conteudo = match.group('conteudo').strip()
+class VanaParser:
+    def __init__(self):
+        # Regex Diamond: Captura a abertura [hk_passage ...], o conteúdo interno e o fechamento
+        self.passage_regex = re.compile(r'\[hk_passage\s+([^\]]+)\](.*?)\[/hk_passage\]', re.DOTALL)
         
-        # 1. Extração de Atributos (ex: ref="BG 4.9")
-        metadata = {}
-        attr_matches = re.findall(r'(\w+)="([^"]*)"', attrs_raw)
-        for key, val in attr_matches:
-            metadata[key] = val
+        # Regex para extrair atributos no formato chave="valor"
+        self.attr_regex = re.compile(r'(\w+)="([^"]*)"')
+        
+        # Regex para encontrar o timestamp protegido ⟦HH:MM:SS⟧
+        self.timestamp_regex = re.compile(r'⟦(\d{1,2}:\d{2}:\d{2})⟧')
+
+    def parse_aula(self, text: str, post_id: int) -> List[Dict]:
+        """
+        Minera o texto do post em busca de passagens estruturadas.
+        Retorna uma lista de dicionários prontos para o Supabase.
+        """
+        print(f"🔍 [VanaParser] Minerando pérolas no post {post_id}...")
+        
+        extracted_data = []
+        matches = self.passage_regex.finditer(text)
+
+        for match in matches:
+            attr_raw = match.group(1)
+            content = match.group(2).strip()
             
-        # 2. Identificação do Título do Segmento
-        # Prioriza 'title', depois 'ref', depois 'name', senão usa o tipo.
-        titulo = metadata.get('title') or metadata.get('ref') or metadata.get('name') or tipo.capitalize()
-        
-        # 3. Captura do Timestamp de Início (o primeiro ⟦HH:MM:SS⟧ dentro do bloco)
-        ts_match = re.search(r"⟦(\d{1,2}:\d{2}:\d{2})⟧", conteudo)
-        timestamp = ts_match.group(1) if ts_match else None
-        
-        # 4. Formatação para a tabela 'segmentos_teologicos'
-        fragments.append({
-            "versao_id": versao_id,
-            "tipo": tipo,
-            "titulo_segmento": titulo,
-            "conteudo": conteudo,
-            "timestamp_inicio": timestamp,
-            "metadata": metadata
-        })
-        
-    return fragments
+            # 1. Extração de Atributos
+            attrs = dict(self.attr_regex.findall(attr_raw))
+            
+            # 2. Detecção de Contexto (Timestamps)
+            # Buscamos o timestamp mais próximo ANTES do início deste bloco
+            timestamp = self._find_nearest_timestamp(text, match.start())
 
-def clean_shortcodes_for_wp(text: str):
-    """
-    Remove ou limpa as tags para o WordPress (opcional). 
-    Se o seu plugin WP já processa shortcodes, esta função não é necessária.
-    """
-    # Exemplo: Remove apenas as tags [vana-xxx] e [/vana-xxx] mantendo o conteúdo.
-    clean_text = re.sub(r"\[/?vana-\w+[^\]]*\]", "", text)
-    return clean_text
+            # 3. Construção do Objeto Diamond
+            passage_obj = {
+                "wp_post_id": post_id,
+                "type": attrs.get("type", "tattva"), # lila, biografia, etc.
+                "is_reel": attrs.get("reel", "false").lower() == "true",
+                "hook": attrs.get("hook", ""),
+                "content_raw": content,
+                "timestamp_start": timestamp,
+                "clean_content": self._remove_internal_shortcodes(content)
+            }
+            
+            extracted_data.append(passage_obj)
+
+        print(f"✅ [VanaParser] {len(extracted_data)} passagens mineradas com sucesso.")
+        return extracted_data
+
+    def _find_nearest_timestamp(self, text: str, position: int) -> str:
+        """
+        Busca reversa pelo timestamp ⟦HH:MM:SS⟧ mais próximo da posição atual.
+        """
+        # Pega todo o texto até o início do bloco
+        lookback_text = text[:position]
+        timestamps = self.timestamp_regex.findall(lookback_text)
+        
+        if timestamps:
+            return timestamps[-1] # Retorna o último encontrado antes do bloco
+        return "00:00:00"
+
+    def _remove_internal_shortcodes(self, text: str) -> str:
+        """
+        Limpa shortcodes internos como [original] e [explicacao] 
+        para que o Reel/Legenda tenha apenas o texto limpo.
+        """
+        clean = re.sub(r'\[/?original\]', '', text)
+        clean = re.sub(r'\[/?explicacao\]', '', clean)
+        return clean.strip()
+
+    def get_summary(self, passages: List[Dict]) -> str:
+        """Gera um resumo rápido para log/auditoria."""
+        reels = [p for p in passages if p['is_reel']]
+        bios = [p for p in passages if p['type'] == 'biografia']
+        return f"Total: {len(passages)} | Reels: {len(reels)} | Biografias: {len(bios)}"

@@ -1,70 +1,132 @@
 # -*- coding: utf-8 -*-
 """
 WordPress REST Client v6.3 Diamond
-- Publicação inteligente baseada em status (Draft vs Publish).
-- Autenticação segura via Application Passwords.
-- Atualização de posts existentes com suporte a Shortcodes.
+- Autenticação Segura: Application Passwords.
+- Gerenciamento de Posts: Criação e Atualização (v19).
+- Suporte a ACF: Persistência de metadados de preservação.
+- Upload de Mídia: Integração com a Biblioteca do WP.
 """
 
 import os
 import requests
-import base64
-from typing import Optional
+from requests.auth import HTTPBasicAuth
+from typing import Dict, List, Optional, Any
 
-class WordPressClient:
+class VanaWPClient:
     def __init__(self):
-        self.url = os.getenv("WP_URL") # Ex: https://site.com/wp-json/wp/v2/posts
-        self.user = os.getenv("WP_USER")
-        self.app_pass = os.getenv("WP_APP_PASS")
+        # Configurações de ambiente
+        self.wp_url = os.getenv("WP_URL", "").rstrip('/')
+        self.username = os.getenv("WP_USERNAME")
+        self.password = os.getenv("WP_APPLICATION_PASSWORD")
         
-        if not all([self.url, self.user, self.app_pass]):
-            print("⚠️ AVISO: Credenciais WordPress incompletas. Publicação desativada.")
-            self.active = False
-        else:
-            self.active = True
-            # Prepara o Header de Autenticação (Basic Auth)
-            auth_str = f"{self.user}:{self.app_pass}"
-            self.auth_header = {
-                "Authorization": "Basic " + base64.b64encode(auth_str.encode()).decode()
-            }
+        if not all([self.wp_url, self.username, self.password]):
+            raise EnvironmentError("❌ Credenciais do WordPress não encontradas nas variáveis de ambiente!")
 
-    def publish_content(self, post_id: int, content: str, status: str = "verificado") -> Optional[int]:
-        """
-        Publica ou atualiza o conteúdo no WordPress.
-        status: 'verificado' -> 'publish'
-        status: 'revisao_pendente' -> 'draft'
-        """
-        if not self.active:
-            return None
+        self.auth = HTTPBasicAuth(self.username, self.password)
+        self.api_base = f"{self.wp_url}/wp-json/wp/v2"
 
-        # Mapeamento de Status para o WordPress
-        wp_status = "publish" if status == "verificado" else "draft"
+    def create_post(self, title: str, content: str, status: str = "draft", 
+                    categories: List[int] = None, tags: List[int] = None, 
+                    meta: Dict[str, Any] = None) -> Optional[int]:
+        """
+        Cria um novo post no WordPress.
+        """
+        print(f"📝 Criando rascunho: {title}...")
         
-        # Endpoint específico do post
-        post_url = f"{self.url}/{post_id}"
-        
-        data = {
+        payload = {
+            "title": title,
             "content": content,
-            "status": wp_status
+            "status": status,
+            "categories": categories or [],
+            "tags": tags or [],
+            "acf": meta or {}  # Suporte para campos ACF
         }
 
-        print(f"   📡 Enviando para WordPress (Post ID: {post_id}, Status: {wp_status})...")
-        
         try:
-            response = requests.post(post_url, headers=self.auth_header, json=data)
-            
-            if response.status_code in [200, 201]:
-                print(f"   ✅ Sucesso! Conteúdo entregue como {wp_status}.")
-                return post_id
-            else:
-                print(f"   ❌ Erro WP ({response.status_code}): {response.text}")
-                return None
-                
+            response = requests.post(
+                f"{self.api_base}/posts",
+                auth=self.auth,
+                json=payload
+            )
+            response.raise_for_status()
+            post_id = response.json().get("id")
+            print(f"✅ Post criado com ID: {post_id}")
+            return post_id
         except Exception as e:
-            print(f"   ❌ Falha na conexão com WordPress: {e}")
+            print(f"❌ Erro ao criar post: {e}")
             return None
 
-def publish_wp(post_id: int, content: str, status: str = "verificado"):
-    """Função facilitadora para o Orchestrator."""
-    client = WordPressClient()
-    return client.publish_content(post_id, content, status)
+    def update_post(self, post_id: int, data: Dict[str, Any]) -> bool:
+        """
+        Atualiza um post existente. Útil para o Beautifier e para o Orchestrator.
+        """
+        print(f"🆙 Atualizando post ID: {post_id}...")
+        
+        try:
+            response = requests.post(
+                f"{self.api_base}/posts/{post_id}",
+                auth=self.auth,
+                json=data
+            )
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            print(f"❌ Erro ao atualizar post {post_id}: {e}")
+            return False
+
+    def get_post(self, post_id: int) -> Optional[Dict]:
+        """Busca os dados de um post (contexto de edição)."""
+        try:
+            response = requests.get(
+                f"{self.api_base}/posts/{post_id}?context=edit",
+                auth=self.auth
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"❌ Erro ao buscar post {post_id}: {e}")
+            return None
+
+    def upload_media(self, file_path: str, post_id: int = None) -> Optional[int]:
+        """
+        Sobe um arquivo para a biblioteca de mídia.
+        """
+        if not os.path.exists(file_path):
+            print(f"⚠️ Arquivo não encontrado: {file_path}")
+            return None
+
+        filename = os.path.basename(file_path)
+        print(f"📸 Subindo mídia: {filename}...")
+
+        headers = {
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Type": "image/jpeg" # Ajuste se for outro tipo
+        }
+
+        with open(file_path, "rb") as img:
+            try:
+                response = requests.post(
+                    f"{self.api_base}/media",
+                    auth=self.auth,
+                    headers=headers,
+                    data=img
+                )
+                response.raise_for_status()
+                media_id = response.json().get("id")
+                
+                # Se um post_id for fornecido, vincula a imagem a ele
+                if post_id and media_id:
+                    self.update_media_parent(media_id, post_id)
+                
+                return media_id
+            except Exception as e:
+                print(f"❌ Erro no upload de mídia: {e}")
+                return None
+
+    def update_media_parent(self, media_id: int, post_id: int):
+        """Vincula uma mídia a um post específico."""
+        requests.post(
+            f"{self.api_base}/media/{media_id}",
+            auth=self.auth,
+            json={"post": post_id}
+        )

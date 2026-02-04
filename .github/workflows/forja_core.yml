@@ -1,0 +1,80 @@
+name: "🚀 Forja Core v6.3 Diamond"
+
+on:
+  # Permite disparar manualmente pelo GitHub
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'URL do Vído (Facebook, YT, etc)'
+        required: true
+      post_id:
+        description: 'ID do Post no WordPress (opcional)'
+        required: false
+
+  # Permite o disparo remoto via Botão no WordPress
+  repository_dispatch:
+    types: [forja_trigger]
+
+jobs:
+  process_hari_katha:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout do Código
+        uses: actions/checkout@v3
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: 🛠️ Instalar Dependências do Sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: 📦 Instalar Dependências Python
+        run: |
+          pip install yt-dlp internetarchive google-api-python-client google-auth-httplib2 google-auth-oauthlib
+          pip install supabase anthropic pandas requests
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: "🔥 Executar Forja: Stage 0 ao 2"
+        env:
+          # Segredos para o "Cofre" e "Cérebro"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          
+          # Conexão WordPress
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APPLICATION_PASSWORD: ${{ secrets.WP_APPLICATION_PASSWORD }}
+          
+          # Preservação (Archive.org & Google Drive)
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+
+        run: |
+          # Define as variáveis baseadas no tipo de gatilho
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            VIDEO_URL="${{ github.event.client_payload.video_url }}"
+            POST_ID="${{ github.event.client_payload.post_id }}"
+          else
+            VIDEO_URL="${{ github.event.inputs.video_url }}"
+            POST_ID="${{ github.event.inputs.post_id }}"
+          fi
+          
+          # Lança o Maestro
+          python vana_orchestrator.py --url "$VIDEO_URL" --post_id "$POST_ID"
+
+      - name: 📸 Upload de Frames (Artifacts)
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: golden-frames
+          path: output/frames/*.jpg
+          retention-days: 5

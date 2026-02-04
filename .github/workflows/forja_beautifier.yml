@@ -1,0 +1,71 @@
+name: "✨ Forja Beautifier v6.3 Diamond"
+
+on:
+  # Disparo manual para polir ou re-embelezar posts específicos
+  workflow_dispatch:
+    inputs:
+      post_id:
+        description: 'ID do Post no WordPress'
+        required: true
+      youtube_url:
+        description: 'URL do Reel/Short no YouTube (opcional)'
+        required: false
+      tour_id:
+        description: 'ID da Tour/Pasta para Galeria (opcional)'
+        required: false
+
+  # Disparo via Webhook do WordPress (quando você clica em "Finalizar Post")
+  repository_dispatch:
+    types: [beautify_trigger]
+
+jobs:
+  enrich_content:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout do Código
+        uses: actions/checkout@v3
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: 📦 Instalar Dependências
+        run: |
+          pip install supabase requests google-api-python-client google-auth-httplib2 google-auth-oauthlib Pillow
+          # Pillow é necessário caso queiramos redimensionar fotos antes do upload
+
+      - name: "🎨 Executar Embelezamento"
+        env:
+          # Conexão WordPress (para injetar mídia no conteúdo)
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APPLICATION_PASSWORD: ${{ secrets.WP_APPLICATION_PASSWORD }}
+
+          # Conexão Supabase (para buscar os trechos que viraram Reels)
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+          # Google Drive (para buscar os Golden Frames salvos na P1)
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+
+        run: |
+          # Define as variáveis baseadas no tipo de gatilho
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            POST_ID="${{ github.event.client_payload.post_id }}"
+            YT_URL="${{ github.event.client_payload.youtube_url }}"
+            TOUR_ID="${{ github.event.client_payload.tour_id }}"
+          else
+            POST_ID="${{ github.event.inputs.post_id }}"
+            YT_URL="${{ github.event.inputs.youtube_url }}"
+            TOUR_ID="${{ github.event.inputs.tour_id }}"
+          fi
+
+          # Lança o Maestro do Embelezamento
+          # Este script substitui placeholders por embeds e galerias
+          python vana_beautifier_maestro.py --post_id "$POST_ID" --yt_url "$YT_URL" --tour_id "$TOUR_ID"
+
+      - name: ✅ Finalizar
+        run: echo "Embelezamento concluído para o post $POST_ID"
