@@ -1,0 +1,94 @@
+name: FB Audio Download Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      fb_url:
+        description: "Facebook video URL (public). Example: https://www.facebook.com/... or https://fb.watch/..."
+        required: true
+        type: string
+      audio_format:
+        description: "Output audio format"
+        required: false
+        default: "mp3"
+        type: choice
+        options:
+          - mp3
+          - m4a
+          - wav
+
+jobs:
+  download-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (yt-dlp + ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -U yt-dlp
+
+      - name: Print tool versions
+        run: |
+          yt-dlp --version
+          ffmpeg -version | head -n 2
+
+      - name: Download best audio from Facebook
+        env:
+          FB_URL: ${{ inputs.fb_url }}
+          OUT_FMT: ${{ inputs.audio_format }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+
+          echo "URL: ${FB_URL}"
+
+          # 1) First, try: extract bestaudio and convert via ffmpeg (yt-dlp postprocessor)
+          #    --no-playlist avoids accidental playlists
+          #    -o sets output base name (extension decided by postprocessor)
+          yt-dlp \
+            --no-playlist \
+            --no-warnings \
+            --progress \
+            --extract-audio \
+            --audio-format "${OUT_FMT}" \
+            --audio-quality 0 \
+            -o "output/fb_audio.%(ext)s" \
+            "${FB_URL}" || true
+
+          echo "Downloaded files:"
+          ls -lah output || true
+
+          # 2) Validate that we actually got an audio file (mp3/m4a/wav)
+          AUDIO_FILE="$(ls -1 output/fb_audio.* 2>/dev/null | head -n 1 || true)"
+          if [ -z "${AUDIO_FILE}" ]; then
+            echo "ERROR: No audio file produced. This usually means:"
+            echo " - Facebook content is not publicly accessible,"
+            echo " - it requires cookies/login,"
+            echo " - or yt-dlp extractor failed."
+            echo "Try a different URL or add cookies support."
+            exit 1
+          fi
+
+          echo "AUDIO_FILE=${AUDIO_FILE}" >> $GITHUB_ENV
+
+      - name: Probe audio duration
+        run: |
+          set -euo pipefail
+          echo "Audio file: $AUDIO_FILE"
+          ffprobe -hide_banner -v error \
+            -show_entries format=duration:format=size \
+            -of default=nw=1 "$AUDIO_FILE"
+
+      - name: Upload artifact (audio)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fb-audio
+          path: ${{ env.AUDIO_FILE }}
+          if-no-files-found: error
+          retention-days: 7
