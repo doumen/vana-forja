@@ -1,0 +1,50 @@
+name: youtube-upload-test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+
+      - name: Validate secrets are present
+        run: |
+          test -n "${{ secrets.YT_CLIENT_ID }}"
+          test -n "${{ secrets.YT_CLIENT_SECRET }}"
+          test -n "${{ secrets.YT_REFRESH_TOKEN }}"
+          echo "Secrets OK"
+
+      - name: Create small dummy video (mp4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          mkdir -p tmp
+          ffmpeg -y -f lavfi -i color=c=black:s=1280x720:d=2 -f lavfi -i anullsrc \
+            -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac tmp/test.mp4
+
+      - name: Upload to YouTube (unlisted)
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          VIDEO_PATH: tmp/test.mp4
+          VIDEO_TITLE: "GHA Upload Test"
+          VIDEO_DESCRIPTION: "Upload test via GitHub Actions"
+          VIDEO_PRIVACY: unlisted
+        run: |
+          python src/scripts/youtube_upload.py
